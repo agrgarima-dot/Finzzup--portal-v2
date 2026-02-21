@@ -40,9 +40,18 @@ const INVITE_CODES = {
     name: "Priya Mehta", company: "Agile Developers Pvt Ltd",
     type: "valuation", clientPack: "msme", email: "priya@agiledev.in",
   },
-  "DEMO2026": {
-    name: "Demo Client", company: "Demo Company",
-    type: "both", clientPack: "startup", email: "demo@finzzup.com",
+  // ── Demo logins — one per client type ──
+  "DEMO-STARTUP": {
+    name: "Riya Kapoor", company: "BrightAI Technologies (Startup)",
+    type: "both", clientPack: "startup", email: "demo-startup@finzzup.com",
+  },
+  "DEMO-MSME": {
+    name: "Suresh Gupta", company: "Gupta Exports Pvt Ltd (MSME)",
+    type: "both", clientPack: "msme", email: "demo-msme@finzzup.com",
+  },
+  "DEMO-CORP": {
+    name: "Anita Desai", company: "Horizon Manufacturing Ltd (Corporate)",
+    type: "both", clientPack: "corporate", email: "demo-corp@finzzup.com",
   },
 };
 
@@ -241,13 +250,26 @@ function Login({ onLogin }) {
               </p>
 
               {/* Demo hint */}
-              <div style={{ marginTop:20, padding:"10px 14px", borderRadius:10,
-                background:`${C.blue}0A`, border:`1px solid ${C.blue}20`, textAlign:"center" }}>
-                <span style={{ fontSize:12, color:C.muted }}>🔍 Try demo: </span>
-                <button onClick={() => { setCode("DEMO2026"); }} style={{ background:"none", border:"none",
-                  color:C.blue, fontWeight:700, fontSize:12, cursor:"pointer", fontFamily:FM }}>
-                  DEMO2026
-                </button>
+              <div style={{ marginTop:20, padding:"14px 16px", borderRadius:12,
+                background:`${C.blue}0A`, border:`1px solid ${C.blue}20` }}>
+                <div style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase",
+                  letterSpacing:"0.08em", marginBottom:10, fontFamily:F }}>🔍 Try a demo account</div>
+                <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                  {[
+                    { code:"DEMO-STARTUP", label:"Startup / CFO Client",  icon:"🚀", color:C.blue   },
+                    { code:"DEMO-MSME",    label:"MSME Client",            icon:"🏢", color:C.teal   },
+                    { code:"DEMO-CORP",    label:"Corporate Client",        icon:"🏦", color:C.purple },
+                  ].map(d => (
+                    <button key={d.code} onClick={() => setCode(d.code)}
+                      style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
+                        padding:"9px 12px", borderRadius:9, border:`1px solid ${d.color}25`,
+                        background:`${d.color}08`, cursor:"pointer", fontFamily:F, width:"100%",
+                        touchAction:"manipulation" }}>
+                      <span style={{ fontSize:13, color:C.text, fontWeight:600 }}>{d.icon} {d.label}</span>
+                      <span style={{ fontFamily:FM, fontSize:11, fontWeight:700, color:d.color }}>{d.code}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             </>
           ) : (
@@ -319,7 +341,8 @@ const NAV = [
   { id:"dashboard",  icon:"📊", label:"Dashboard"         },
   { id:"cashflow",   icon:"💰", label:"Cash Flow"          },
   { id:"actions",    icon:"✅", label:"Action Items"       },
-  { id:"cfopacks",   icon:"🎯", label:"CFO Packs"           },
+  { id:"boardpacks", icon:"📁", label:"Board Packs"        },
+  { id:"cfopacks",   icon:"🎯", label:"CFO Packs"          },
   { id:"engagement", icon:"📋", label:"Valuation Status"  },
   { id:"calendar",   icon:"📅", label:"Book a Call"        },
 ];
@@ -1696,8 +1719,9 @@ function Calendar() {
 // ─── PORTAL SHELL ─────────────────────────────────────────────────────────────
 const PAGE_TITLES = {
   dashboard: "Dashboard", cashflow: "Cash Flow",
-  actions: "Action Items", cfopacks: "CFO Packs",
-  engagement: "Valuation Status", calendar: "Book a Call",
+  actions: "Action Items", boardpacks: "Board Packs",
+  cfopacks: "CFO Packs", engagement: "Valuation Status",
+  calendar: "Book a Call",
 };
 
 function Portal({ client, onLogout }) {
@@ -1708,6 +1732,7 @@ function Portal({ client, onLogout }) {
     dashboard:  <Dashboard  client={client}/>,
     cashflow:   <CashFlow/>,
     actions:    <ActionItems/>,
+    boardpacks: <BoardPacksTabbed/>,
     cfopacks:   <CFOPacks   client={client}/>,
     engagement: <Engagement/>,
     calendar:   <Calendar/>,
@@ -1734,3 +1759,4 @@ export default function App() {
   if (!client) return <Login onLogin={setClient}/>;
   return <Portal client={client} onLogout={() => setClient(null)}/>;
 }
+
