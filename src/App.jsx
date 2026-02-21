@@ -381,15 +381,38 @@ function Login({ onLogin }) {
 }
 
 // ─── SIDEBAR ──────────────────────────────────────────────────────────────────
-const NAV = [
-  { id:"dashboard",  icon:"📊", label:"Dashboard"         },
-  { id:"cashflow",   icon:"💰", label:"Cash Flow"          },
-  { id:"actions",    icon:"✅", label:"Action Items"       },
-  { id:"boardpacks", icon:"📁", label:"Board Packs"        },
-  { id:"cfopacks",   icon:"🎯", label:"CFO Packs"          },
-  { id:"engagement", icon:"📋", label:"Valuation Status"  },
-  { id:"calendar",   icon:"📅", label:"Book a Call"        },
-];
+// Dynamic nav based on client pack type
+function getNav(client) {
+  const pack = client?.client_pack || "startup";
+  const type = client?.type || "both";
+
+  const base = [
+    { id:"dashboard", icon:"📊", label:"Dashboard" },
+  ];
+
+  // CFO/financial items — shown for cfo + both
+  if (type === "cfo" || type === "both") {
+    base.push({ id:"cashflow", icon:"💰", label:"Cash Flow" });
+    base.push({ id:"actions",  icon:"✅", label:"Action Items" });
+  }
+
+  // My Reports — label changes by pack type
+  const reportLabel = pack === "msme" ? "MSME Report"
+    : pack === "corporate" ? "Board Report"
+    : "CFO Report";
+  const reportIcon = pack === "msme" ? "🏢"
+    : pack === "corporate" ? "🏦"
+    : "📊";
+  base.push({ id:"myreport", icon:reportIcon, label:reportLabel });
+
+  // Valuation — shown for valuation + both
+  if (type === "valuation" || type === "both") {
+    base.push({ id:"engagement", icon:"📋", label:"Valuation Status" });
+  }
+
+  base.push({ id:"calendar", icon:"📅", label:"Book a Call" });
+  return base;
+}
 
 function Sidebar({ page, setPage, client, onLogout, collapsed, setCollapsed }) {
   return (
@@ -419,7 +442,7 @@ function Sidebar({ page, setPage, client, onLogout, collapsed, setCollapsed }) {
 
       {/* Nav */}
       <nav style={{ flex:1, padding:"10px 0", overflowY:"auto" }}>
-        {NAV.map(n => (
+        {getNav(client).map(n => (
           <button key={n.id} onClick={() => setPage(n.id)} style={{
             display:"flex", alignItems:"center", gap:10,
             width:"100%", padding: collapsed ? "12px 0" : "11px 16px",
@@ -533,7 +556,7 @@ function Dashboard({ client }) {
       {/* Quick links row */}
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14 }} className="quick-grid">
         {[
-          { icon:"📁", label:"Latest Board Pack", sub:"February 2026", color:C.purple, action:"cfopacks"  },
+          { icon:"📁", label:"Latest Report",      sub:"February 2026", color:C.purple, action:"myreport"  },
           { icon:"✅", label:"Action Items",       sub:"2 pending (High priority)", color:C.red,    action:"actions"    },
           { icon:"📋", label:"Valuation Status",   sub:"Analysis in progress", color:C.teal,   action:"engagement" },
         ].map((q,i) => (
@@ -1761,12 +1784,30 @@ function Calendar() {
 }
 
 // ─── PORTAL SHELL ─────────────────────────────────────────────────────────────
-const PAGE_TITLES = {
-  dashboard: "Dashboard", cashflow: "Cash Flow",
-  actions: "Action Items", boardpacks: "Board Packs",
-  cfopacks: "CFO Packs", engagement: "Valuation Status",
-  calendar: "Book a Call",
-};
+
+// My Report component — shows correct pack based on client type
+function MyReport({ client }) {
+  const pack = client?.client_pack || "startup";
+  if (pack === "msme")      return <MSMEPackContent/>;
+  if (pack === "corporate") return <CorporatePackContent/>;
+  return <CFOPackContent/>;  // startup / default
+}
+
+function getPageTitle(page, client) {
+  const pack = client?.client_pack || "startup";
+  const reportLabel = pack === "msme" ? "MSME Report"
+    : pack === "corporate" ? "Board Report"
+    : "CFO Report";
+  const map = {
+    dashboard:  "Dashboard",
+    cashflow:   "Cash Flow",
+    actions:    "Action Items",
+    myreport:   reportLabel,
+    engagement: "Valuation Status",
+    calendar:   "Book a Call",
+  };
+  return map[page] || "Dashboard";
+}
 
 function Portal({ client, onLogout }) {
   const [page,      setPage]      = useState("dashboard");
@@ -1776,8 +1817,7 @@ function Portal({ client, onLogout }) {
     dashboard:  <Dashboard  client={client}/>,
     cashflow:   <CashFlow/>,
     actions:    <ActionItems/>,
-    boardpacks: <BoardPacksTabbed/>,
-    cfopacks:   <CFOPacks   client={client}/>,
+    myreport:   <MyReport client={client}/>,
     engagement: <Engagement/>,
     calendar:   <Calendar/>,
   };
@@ -1787,7 +1827,7 @@ function Portal({ client, onLogout }) {
       <Sidebar page={page} setPage={setPage} client={client}
         onLogout={onLogout} collapsed={collapsed} setCollapsed={setCollapsed}/>
       <div style={{ flex:1, display:"flex", flexDirection:"column", minWidth:0, overflow:"hidden" }}>
-        <Topbar title={PAGE_TITLES[page]} client={client}/>
+        <Topbar title={getPageTitle(page, client)} client={client}/>
         <main style={{ flex:1, overflowY:"auto" }}>
           {pages[page]}
         </main>
@@ -1797,24 +1837,617 @@ function Portal({ client, onLogout }) {
 }
 
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
+
+// ─── ADMIN PANEL ──────────────────────────────────────────────────────────────
+
+function AdminLogin({ onLogin }) {
+  const [form, setForm] = useState({ email:"", password:"" });
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const signIn = async () => {
+    if (!form.email || !form.password) { setError("Please fill in all fields."); return; }
+    setLoading(true); setError("");
+    const { error: authErr } = await supabase.auth.signInWithPassword({
+      email: form.email, password: form.password
+    });
+    if (authErr) { setLoading(false); setError("Invalid credentials."); return; }
+    // Check if admin
+    const { data: adminData } = await supabase
+      .from("admins").select("*").eq("email", form.email).single();
+    setLoading(false);
+    if (!adminData) { await supabase.auth.signOut(); setError("Not authorised as admin."); return; }
+    onLogin(adminData);
+  };
+
+  return (
+    <div style={{ minHeight:"100vh", background:"#0A1128", display:"flex", alignItems:"center",
+      justifyContent:"center", padding:20, fontFamily:F }}>
+      <div style={{ width:"100%", maxWidth:400 }}>
+        <div style={{ textAlign:"center", marginBottom:32 }}>
+          <Logo size={36}/>
+          <div style={{ marginTop:10, display:"inline-block", padding:"4px 14px", borderRadius:100,
+            background:"rgba(251,191,36,0.15)", border:"1px solid rgba(251,191,36,0.3)" }}>
+            <span style={{ fontSize:11, fontWeight:700, color:"#FBBF24", letterSpacing:"0.1em" }}>ADMIN ACCESS</span>
+          </div>
+        </div>
+        <Card style={{ padding:32 }}>
+          <h2 style={{ fontWeight:700, fontSize:20, color:C.text, marginBottom:20, textAlign:"center" }}>
+            Garima's Admin Panel
+          </h2>
+          {[
+            { label:"Email", key:"email", type:"email", placeholder:"garima@finzzup.com" },
+            { label:"Password", key:"password", type:"password", placeholder:"Your password" },
+          ].map(({ label, key, type, placeholder }) => (
+            <div key={key} style={{ marginBottom:14 }}>
+              <label style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase",
+                letterSpacing:"0.08em", display:"block", marginBottom:7, fontFamily:F }}>{label}</label>
+              <input value={form[key]}
+                onChange={e => { setForm(f=>({...f,[key]:e.target.value})); setError(""); }}
+                onKeyDown={e => e.key==="Enter" && signIn()}
+                type={type} placeholder={placeholder}
+                style={{ width:"100%", padding:"12px 14px", borderRadius:10, fontSize:16,
+                  border:`1.5px solid ${C.border}`, fontFamily:F, color:C.text,
+                  background:C.bg, outline:"none", boxSizing:"border-box" }}
+                onFocus={e => e.target.style.borderColor = C.amber}
+                onBlur={e  => e.target.style.borderColor = C.border}
+              />
+            </div>
+          ))}
+          {error && <p style={{ color:C.red, fontSize:12, marginTop:4 }}>{error}</p>}
+          <button onClick={signIn} disabled={loading} style={{ width:"100%", marginTop:8, padding:14,
+            borderRadius:12, border:"none", background:"linear-gradient(135deg,#F59E0B,#EF4444)",
+            color:"white", fontFamily:F, fontWeight:700, fontSize:15, cursor:"pointer",
+            opacity:loading?0.75:1, touchAction:"manipulation" }}>
+            {loading ? "Signing in…" : "Sign In →"}
+          </button>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function AdminPanel({ admin, onLogout }) {
+  const [tab, setTab]         = useState("clients");
+  const [clients, setClients] = useState([]);
+  const [selected, setSelected] = useState(null); // selected client for editing
+  const [loading, setLoading] = useState(false);
+  const [saved, setSaved]     = useState(false);
+
+  // KPI edit state
+  const [kpis, setKpis] = useState({
+    month:"", revenue:"", gross_margin:"", cash_balance:"",
+    burn_rate:"", runway:"", arr:"", garima_note:""
+  });
+
+  // Action items state
+  const [actions, setActions] = useState([]);
+  const [newAction, setNewAction] = useState({ text:"", priority:"High", month:"" });
+
+  // New client state
+  const [newClient, setNewClient] = useState({
+    name:"", company:"", email:"", invite_code:"", client_pack:"startup", type:"both"
+  });
+
+  // Engagement state
+  const [engagement, setEngagement] = useState({ type:"", ref_number:"", status:0, expected_date:"", garima_note:"" });
+
+  useEffect(() => { fetchClients(); }, []);
+
+  const fetchClients = async () => {
+    const { data } = await supabase.from("clients").select("*").order("created_at", { ascending:false });
+    setClients(data || []);
+  };
+
+  const selectClient = async (c) => {
+    setSelected(c); setSaved(false);
+    // Load latest KPIs
+    const { data: kpiData } = await supabase.from("kpis")
+      .select("*").eq("client_id", c.id).order("updated_at", { ascending:false }).limit(1).single();
+    if (kpiData) setKpis(kpiData);
+    else setKpis({ month:"", revenue:"", gross_margin:"", cash_balance:"", burn_rate:"", runway:"", arr:"", garima_note:"" });
+    // Load actions
+    const { data: actData } = await supabase.from("action_items")
+      .select("*").eq("client_id", c.id).order("created_at", { ascending:false });
+    setActions(actData || []);
+    // Load engagement
+    const { data: engData } = await supabase.from("engagements")
+      .select("*").eq("client_id", c.id).single();
+    if (engData) setEngagement(engData);
+    else setEngagement({ type:"", ref_number:"", status:0, expected_date:"", garima_note:"" });
+  };
+
+  const saveKPIs = async () => {
+    if (!selected) return;
+    setLoading(true);
+    const payload = { ...kpis, client_id: selected.id, updated_at: new Date().toISOString() };
+    if (kpis.id) {
+      await supabase.from("kpis").update(payload).eq("id", kpis.id);
+    } else {
+      const { data } = await supabase.from("kpis").insert(payload).select().single();
+      if (data) setKpis(data);
+    }
+    setLoading(false); setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  };
+
+  const addAction = async () => {
+    if (!selected || !newAction.text) return;
+    const { data } = await supabase.from("action_items")
+      .insert({ ...newAction, client_id: selected.id }).select().single();
+    if (data) setActions(prev => [data, ...prev]);
+    setNewAction({ text:"", priority:"High", month:newAction.month });
+  };
+
+  const toggleAction = async (a) => {
+    await supabase.from("action_items").update({ done: !a.done }).eq("id", a.id);
+    setActions(prev => prev.map(x => x.id===a.id ? {...x, done:!x.done} : x));
+  };
+
+  const deleteAction = async (id) => {
+    await supabase.from("action_items").delete().eq("id", id);
+    setActions(prev => prev.filter(x => x.id!==id));
+  };
+
+  const saveEngagement = async () => {
+    if (!selected) return;
+    setLoading(true);
+    if (engagement.id) {
+      await supabase.from("engagements").update(engagement).eq("id", engagement.id);
+    } else {
+      const { data } = await supabase.from("engagements")
+        .insert({ ...engagement, client_id: selected.id }).select().single();
+      if (data) setEngagement(data);
+    }
+    setLoading(false); setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  };
+
+  const createClient = async () => {
+    if (!newClient.name || !newClient.email || !newClient.invite_code) return;
+    const { data, error } = await supabase.from("clients").insert(newClient).select().single();
+    if (error) { alert("Error: " + error.message); return; }
+    setClients(prev => [data, ...prev]);
+    setNewClient({ name:"", company:"", email:"", invite_code:"", client_pack:"startup", type:"both" });
+    setTab("clients");
+  };
+
+  const genCode = () => {
+    const prefix = newClient.company?.slice(0,4).toUpperCase().replace(/\s/g,"") || "CLIE";
+    const year = new Date().getFullYear();
+    setNewClient(c => ({ ...c, invite_code: `${prefix}${year}` }));
+  };
+
+  const ADMIN_TABS = [
+    { id:"clients",    icon:"👥", label:"All Clients"     },
+    { id:"addclient",  icon:"➕", label:"Add Client"      },
+    { id:"kpis",       icon:"📊", label:"Update KPIs"     },
+    { id:"actions",    icon:"✅", label:"Action Items"    },
+    { id:"engagement", icon:"📋", label:"Valuation"       },
+  ];
+
+  const Input = ({ label, val, onChange, type="text", placeholder="", mono=false }) => (
+    <div style={{ marginBottom:12 }}>
+      <label style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase",
+        letterSpacing:"0.08em", display:"block", marginBottom:6, fontFamily:F }}>{label}</label>
+      <input value={val} onChange={e => onChange(e.target.value)} type={type} placeholder={placeholder}
+        style={{ width:"100%", padding:"10px 12px", borderRadius:9, fontSize:14,
+          border:`1.5px solid ${C.border}`, fontFamily:mono?FM:F, color:C.text,
+          background:C.bg, outline:"none", boxSizing:"border-box" }}
+        onFocus={e => e.target.style.borderColor = C.amber}
+        onBlur={e  => e.target.style.borderColor = C.border}
+      />
+    </div>
+  );
+
+  const Select = ({ label, val, onChange, options }) => (
+    <div style={{ marginBottom:12 }}>
+      <label style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase",
+        letterSpacing:"0.08em", display:"block", marginBottom:6, fontFamily:F }}>{label}</label>
+      <select value={val} onChange={e => onChange(e.target.value)}
+        style={{ width:"100%", padding:"10px 12px", borderRadius:9, fontSize:14,
+          border:`1.5px solid ${C.border}`, fontFamily:F, color:C.text,
+          background:C.bg, outline:"none", boxSizing:"border-box" }}>
+        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </div>
+  );
+
+  const SaveBtn = ({ onClick, label="Save Changes" }) => (
+    <button onClick={onClick} disabled={loading} style={{ padding:"11px 24px", borderRadius:10,
+      border:"none", background:"linear-gradient(135deg,#F59E0B,#EF4444)", color:"white",
+      fontFamily:F, fontWeight:700, fontSize:14, cursor:"pointer", opacity:loading?0.75:1,
+      touchAction:"manipulation" }}>
+      {loading ? "Saving…" : saved ? "✅ Saved!" : label}
+    </button>
+  );
+
+  return (
+    <div style={{ display:"flex", minHeight:"100vh", background:C.bg, fontFamily:F }}>
+      {/* Admin Sidebar */}
+      <aside style={{ width:220, minHeight:"100vh", background:C.navy, flexShrink:0,
+        display:"flex", flexDirection:"column", borderRight:"1px solid rgba(255,255,255,0.06)" }}>
+        <div style={{ padding:"22px 20px", borderBottom:"1px solid rgba(255,255,255,0.07)" }}>
+          <Logo size={26}/>
+          <div style={{ marginTop:10, padding:"4px 10px", borderRadius:100, display:"inline-block",
+            background:"rgba(251,191,36,0.15)", border:"1px solid rgba(251,191,36,0.3)" }}>
+            <span style={{ fontSize:10, fontWeight:700, color:"#FBBF24", letterSpacing:"0.1em" }}>ADMIN</span>
+          </div>
+        </div>
+        <div style={{ padding:"12px 16px", borderBottom:"1px solid rgba(255,255,255,0.07)" }}>
+          <div style={{ fontSize:11, color:"rgba(255,255,255,0.35)", fontFamily:F }}>Logged in as</div>
+          <div style={{ fontSize:13, fontWeight:700, color:"white", fontFamily:F, marginTop:2 }}>{admin.name}</div>
+        </div>
+        {/* Client selector */}
+        {clients.length > 0 && (
+          <div style={{ padding:"10px 12px", borderBottom:"1px solid rgba(255,255,255,0.07)" }}>
+            <div style={{ fontSize:10, fontWeight:700, color:"rgba(255,255,255,0.35)",
+              textTransform:"uppercase", letterSpacing:"0.08em", marginBottom:6, fontFamily:F }}>
+              Active Client
+            </div>
+            <select value={selected?.id || ""} onChange={e => {
+              const c = clients.find(x => x.id===e.target.value);
+              if (c) selectClient(c);
+            }} style={{ width:"100%", padding:"8px 10px", borderRadius:8, fontSize:12,
+              background:"rgba(255,255,255,0.08)", border:"1px solid rgba(255,255,255,0.15)",
+              color:"white", fontFamily:F, outline:"none" }}>
+              <option value="">— Select client —</option>
+              {clients.map(c => <option key={c.id} value={c.id}>{c.name} ({c.client_pack})</option>)}
+            </select>
+          </div>
+        )}
+        <nav style={{ flex:1, padding:"10px 0" }}>
+          {ADMIN_TABS.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{
+              display:"flex", alignItems:"center", gap:10, width:"100%",
+              padding:"11px 16px", background:tab===t.id?"rgba(251,191,36,0.15)":"transparent",
+              border:"none", cursor:"pointer",
+              borderLeft:tab===t.id?"3px solid #FBBF24":"3px solid transparent",
+              fontFamily:F }}>
+              <span style={{ fontSize:16 }}>{t.icon}</span>
+              <span style={{ fontSize:13, fontWeight:600,
+                color:tab===t.id?"#FBBF24":"rgba(255,255,255,0.5)" }}>{t.label}</span>
+            </button>
+          ))}
+        </nav>
+        <div style={{ padding:"10px 12px", borderTop:"1px solid rgba(255,255,255,0.07)" }}>
+          <button onClick={onLogout} style={{ display:"flex", alignItems:"center", gap:8,
+            width:"100%", padding:"10px 12px", background:"none", border:"none",
+            cursor:"pointer", borderRadius:8, fontFamily:F, fontSize:13,
+            fontWeight:600, color:"rgba(255,255,255,0.35)" }}>
+            <span>🚪</span> Sign Out
+          </button>
+        </div>
+      </aside>
+
+      {/* Main content */}
+      <div style={{ flex:1, overflowY:"auto" }}>
+        {/* Header */}
+        <div style={{ height:58, background:C.bg2, borderBottom:`1px solid ${C.border}`,
+          display:"flex", alignItems:"center", padding:"0 24px", gap:12 }}>
+          <h1 style={{ fontFamily:F, fontWeight:700, fontSize:17, color:C.text, margin:0 }}>
+            {ADMIN_TABS.find(t=>t.id===tab)?.label}
+          </h1>
+          {selected && tab !== "clients" && tab !== "addclient" && (
+            <div style={{ padding:"4px 12px", borderRadius:100, background:`${C.amber}15`,
+              border:`1px solid ${C.amber}30` }}>
+              <span style={{ fontSize:12, fontWeight:700, color:C.amber, fontFamily:F }}>
+                {selected.name} — {selected.company}
+              </span>
+            </div>
+          )}
+        </div>
+
+        <div style={{ padding:24 }}>
+
+          {/* ── ALL CLIENTS ── */}
+          {tab === "clients" && (
+            <div>
+              <p style={{ fontFamily:F, fontSize:13, color:C.muted, marginBottom:20 }}>
+                {clients.length} client{clients.length!==1?"s":""} registered
+              </p>
+              <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+                {clients.map(c => (
+                  <Card key={c.id} style={{ padding:"16px 20px", cursor:"pointer",
+                    borderLeft: selected?.id===c.id ? `3px solid ${C.amber}` : `3px solid transparent` }}
+                    onClick={() => { selectClient(c); setTab("kpis"); }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
+                      <div>
+                        <div style={{ fontFamily:F, fontWeight:700, fontSize:15, color:C.text }}>{c.name}</div>
+                        <div style={{ fontFamily:F, fontSize:12, color:C.muted, marginTop:2 }}>{c.company}</div>
+                        <div style={{ fontFamily:FM, fontSize:11, color:C.dim, marginTop:4 }}>{c.email}</div>
+                      </div>
+                      <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:6 }}>
+                        <Badge color={C.blue}>{c.client_pack}</Badge>
+                        <div style={{ fontFamily:FM, fontSize:11, fontWeight:700, color:C.amber }}>
+                          {c.invite_code}
+                        </div>
+                        <div style={{ fontSize:11, color:c.active?C.green:C.red, fontWeight:700, fontFamily:F }}>
+                          {c.active ? "● Active" : "● Inactive"}
+                        </div>
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+              {clients.length === 0 && (
+                <Card style={{ textAlign:"center", padding:40 }}>
+                  <div style={{ fontSize:32, marginBottom:12 }}>👥</div>
+                  <div style={{ fontFamily:F, fontSize:15, color:C.muted }}>No clients yet</div>
+                  <button onClick={() => setTab("addclient")} style={{ marginTop:16, padding:"10px 20px",
+                    borderRadius:10, border:"none", background:C.blue, color:"white",
+                    fontFamily:F, fontWeight:700, cursor:"pointer" }}>
+                    Add First Client →
+                  </button>
+                </Card>
+              )}
+            </div>
+          )}
+
+          {/* ── ADD CLIENT ── */}
+          {tab === "addclient" && (
+            <Card style={{ maxWidth:520 }}>
+              <div style={{ fontFamily:F, fontWeight:700, fontSize:16, color:C.text, marginBottom:20 }}>
+                New Client Details
+              </div>
+              <Input label="Client Name"    val={newClient.name}    onChange={v=>setNewClient(c=>({...c,name:v}))}    placeholder="e.g. Ravi Sharma" />
+              <Input label="Company"        val={newClient.company} onChange={v=>setNewClient(c=>({...c,company:v}))} placeholder="e.g. Sharma Textiles Pvt Ltd" />
+              <Input label="Email"          val={newClient.email}   onChange={v=>setNewClient(c=>({...c,email:v}))}   type="email" placeholder="client@company.com" />
+              <div style={{ display:"flex", gap:10, alignItems:"flex-end" }}>
+                <div style={{ flex:1 }}>
+                  <Input label="Invite Code" val={newClient.invite_code}
+                    onChange={v=>setNewClient(c=>({...c,invite_code:v.toUpperCase()}))}
+                    placeholder="e.g. SHAR2026" mono={true} />
+                </div>
+                <button onClick={genCode} style={{ padding:"10px 14px", borderRadius:9, marginBottom:12,
+                  border:`1px solid ${C.border}`, background:C.bg3, fontFamily:F, fontSize:12,
+                  color:C.muted, cursor:"pointer", whiteSpace:"nowrap" }}>
+                  Auto-generate
+                </button>
+              </div>
+              <Select label="Pack Type" val={newClient.client_pack}
+                onChange={v=>setNewClient(c=>({...c,client_pack:v}))}
+                options={[
+                  {value:"startup",   label:"Startup / CFO Pack"},
+                  {value:"msme",      label:"MSME Pack"},
+                  {value:"corporate", label:"Corporate Pack"},
+                ]}/>
+              <Select label="Service Type" val={newClient.type}
+                onChange={v=>setNewClient(c=>({...c,type:v}))}
+                options={[
+                  {value:"both",      label:"CFO + Valuation"},
+                  {value:"cfo",       label:"CFO Only"},
+                  {value:"valuation", label:"Valuation Only"},
+                ]}/>
+              <div style={{ marginTop:8 }}>
+                <button onClick={createClient} style={{ padding:"12px 24px", borderRadius:10,
+                  border:"none", background:C.grad1, color:"white", fontFamily:F,
+                  fontWeight:700, fontSize:14, cursor:"pointer", touchAction:"manipulation" }}>
+                  Create Client →
+                </button>
+              </div>
+              <div style={{ marginTop:16, padding:"10px 14px", borderRadius:10,
+                background:`${C.blue}08`, border:`1px solid ${C.blue}20` }}>
+                <p style={{ fontFamily:F, fontSize:12, color:C.muted, margin:0, lineHeight:1.7 }}>
+                  💡 After creating, share the invite code with your client. They go to the portal,
+                  enter the code, and create their own password. No manual password setup needed.
+                </p>
+              </div>
+            </Card>
+          )}
+
+          {/* ── UPDATE KPIs ── */}
+          {tab === "kpis" && (
+            <div style={{ maxWidth:600 }}>
+              {!selected ? (
+                <Card style={{ textAlign:"center", padding:40 }}>
+                  <div style={{ fontSize:32, marginBottom:12 }}>👆</div>
+                  <div style={{ fontFamily:F, fontSize:14, color:C.muted }}>Select a client from the sidebar first</div>
+                </Card>
+              ) : (
+                <Card>
+                  <div style={{ fontFamily:F, fontWeight:700, fontSize:16, color:C.text, marginBottom:4 }}>
+                    KPI Update — {selected.name}
+                  </div>
+                  <p style={{ fontFamily:F, fontSize:12, color:C.muted, marginBottom:20 }}>
+                    These numbers appear on the client's dashboard instantly after saving.
+                  </p>
+                  <Input label="Month" val={kpis.month} onChange={v=>setKpis(k=>({...k,month:v}))} placeholder="e.g. February 2026" />
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }} className="kpi-edit-grid">
+                    {[
+                      { label:"Revenue",      key:"revenue",      placeholder:"e.g. ₹8.4 Cr"  },
+                      { label:"Gross Margin", key:"gross_margin", placeholder:"e.g. 41%"       },
+                      { label:"Cash Balance", key:"cash_balance", placeholder:"e.g. ₹2.1 Cr"  },
+                      { label:"Burn Rate",    key:"burn_rate",    placeholder:"e.g. ₹48L/mo"  },
+                      { label:"Runway",       key:"runway",       placeholder:"e.g. 4.4 months"},
+                      { label:"ARR",          key:"arr",          placeholder:"e.g. ₹6.2 Cr"  },
+                    ].map(f => (
+                      <Input key={f.key} label={f.label} val={kpis[f.key]||""}
+                        onChange={v=>setKpis(k=>({...k,[f.key]:v}))} placeholder={f.placeholder} mono />
+                    ))}
+                  </div>
+                  <div style={{ marginBottom:12 }}>
+                    <label style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase",
+                      letterSpacing:"0.08em", display:"block", marginBottom:6, fontFamily:F }}>
+                      Garima's Note (shown on dashboard)
+                    </label>
+                    <textarea value={kpis.garima_note||""} onChange={e=>setKpis(k=>({...k,garima_note:e.target.value}))}
+                      rows={4} placeholder="Write your monthly note for the client here..."
+                      style={{ width:"100%", padding:"10px 12px", borderRadius:9, fontSize:14,
+                        border:`1.5px solid ${C.border}`, fontFamily:F, color:C.text,
+                        background:C.bg, outline:"none", boxSizing:"border-box", resize:"vertical" }}
+                      onFocus={e => e.target.style.borderColor = C.amber}
+                      onBlur={e  => e.target.style.borderColor = C.border}
+                    />
+                  </div>
+                  <SaveBtn onClick={saveKPIs}/>
+                </Card>
+              )}
+              <style>{`.kpi-edit-grid{grid-template-columns:1fr 1fr!important}@media(max-width:480px){.kpi-edit-grid{grid-template-columns:1fr!important}}`}</style>
+            </div>
+          )}
+
+          {/* ── ACTION ITEMS ── */}
+          {tab === "actions" && (
+            <div style={{ maxWidth:600 }}>
+              {!selected ? (
+                <Card style={{ textAlign:"center", padding:40 }}>
+                  <div style={{ fontSize:32, marginBottom:12 }}>👆</div>
+                  <div style={{ fontFamily:F, fontSize:14, color:C.muted }}>Select a client from the sidebar first</div>
+                </Card>
+              ) : (<>
+                <Card style={{ marginBottom:20 }}>
+                  <div style={{ fontFamily:F, fontWeight:700, fontSize:15, color:C.text, marginBottom:16 }}>
+                    Add Action Item for {selected.name}
+                  </div>
+                  <div style={{ marginBottom:12 }}>
+                    <label style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase",
+                      letterSpacing:"0.08em", display:"block", marginBottom:6, fontFamily:F }}>Action</label>
+                    <input value={newAction.text} onChange={e=>setNewAction(a=>({...a,text:e.target.value}))}
+                      placeholder="e.g. File GST returns for Q3 by 15 March"
+                      style={{ width:"100%", padding:"10px 12px", borderRadius:9, fontSize:14,
+                        border:`1.5px solid ${C.border}`, fontFamily:F, color:C.text,
+                        background:C.bg, outline:"none", boxSizing:"border-box" }}/>
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                    <Select label="Priority" val={newAction.priority} onChange={v=>setNewAction(a=>({...a,priority:v}))}
+                      options={[{value:"High",label:"High"},{value:"Medium",label:"Medium"},{value:"Low",label:"Low"}]}/>
+                    <Input label="Month" val={newAction.month} onChange={v=>setNewAction(a=>({...a,month:v}))} placeholder="e.g. March 2026"/>
+                  </div>
+                  <button onClick={addAction} style={{ padding:"10px 20px", borderRadius:10,
+                    border:"none", background:C.grad1, color:"white", fontFamily:F,
+                    fontWeight:700, fontSize:13, cursor:"pointer" }}>
+                    + Add Item
+                  </button>
+                </Card>
+                <Card>
+                  <div style={{ fontFamily:F, fontWeight:700, fontSize:15, color:C.text, marginBottom:16 }}>
+                    Current Action Items ({actions.length})
+                  </div>
+                  {actions.length === 0 && (
+                    <p style={{ fontFamily:F, fontSize:13, color:C.dim }}>No action items yet.</p>
+                  )}
+                  <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                    {actions.map(a => (
+                      <div key={a.id} style={{ display:"flex", alignItems:"flex-start", gap:10,
+                        padding:"10px 14px", borderRadius:10, background:a.done?`${C.green}06`:C.bg,
+                        border:`1px solid ${a.done?C.green+"25":C.border}` }}>
+                        <div onClick={() => toggleAction(a)} style={{ width:20, height:20, borderRadius:6,
+                          background:a.done?C.green:C.bg3, display:"flex", alignItems:"center",
+                          justifyContent:"center", cursor:"pointer", flexShrink:0, marginTop:2 }}>
+                          {a.done && <span style={{ color:"white", fontSize:10, fontWeight:900 }}>✓</span>}
+                        </div>
+                        <div style={{ flex:1 }}>
+                          <div style={{ fontFamily:F, fontSize:13, color:a.done?C.dim:C.text,
+                            textDecoration:a.done?"line-through":"none" }}>{a.text}</div>
+                          <div style={{ display:"flex", gap:8, marginTop:4, flexWrap:"wrap" }}>
+                            <PriBadge p={a.priority}/>
+                            {a.month && <span style={{ fontSize:11, color:C.dim, fontFamily:F }}>{a.month}</span>}
+                          </div>
+                        </div>
+                        <button onClick={() => deleteAction(a.id)} style={{ background:"none", border:"none",
+                          color:C.dim, cursor:"pointer", fontSize:16, padding:2 }}>🗑</button>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              </>)}
+            </div>
+          )}
+
+          {/* ── VALUATION ENGAGEMENT ── */}
+          {tab === "engagement" && (
+            <div style={{ maxWidth:520 }}>
+              {!selected ? (
+                <Card style={{ textAlign:"center", padding:40 }}>
+                  <div style={{ fontSize:32, marginBottom:12 }}>👆</div>
+                  <div style={{ fontFamily:F, fontSize:14, color:C.muted }}>Select a client from the sidebar first</div>
+                </Card>
+              ) : (
+                <Card>
+                  <div style={{ fontFamily:F, fontWeight:700, fontSize:16, color:C.text, marginBottom:20 }}>
+                    Valuation Engagement — {selected.name}
+                  </div>
+                  <Input label="Engagement Type" val={engagement.type||""}
+                    onChange={v=>setEngagement(e=>({...e,type:v}))}
+                    placeholder="e.g. DCF Valuation — Section 56(2)(viib)"/>
+                  <Input label="Reference Number" val={engagement.ref_number||""}
+                    onChange={v=>setEngagement(e=>({...e,ref_number:v}))}
+                    placeholder="e.g. VAL-240216" mono/>
+                  <Input label="Expected Date" val={engagement.expected_date||""}
+                    onChange={v=>setEngagement(e=>({...e,expected_date:v}))}
+                    placeholder="e.g. 28 Feb 2026"/>
+                  <div style={{ marginBottom:12 }}>
+                    <label style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase",
+                      letterSpacing:"0.08em", display:"block", marginBottom:10, fontFamily:F }}>
+                      Status (Stage {engagement.status} of 5)
+                    </label>
+                    <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                      {["Docs Requested","Docs Received","Analysis","Draft Ready","Revision","Final Signed"].map((s,i) => (
+                        <button key={i} onClick={() => setEngagement(e=>({...e,status:i}))}
+                          style={{ padding:"7px 12px", borderRadius:8, border:"none", cursor:"pointer",
+                            fontFamily:F, fontSize:12, fontWeight:600,
+                            background: engagement.status===i ? C.blue : C.bg3,
+                            color: engagement.status===i ? "white" : C.muted,
+                            touchAction:"manipulation" }}>
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ marginBottom:16 }}>
+                    <label style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase",
+                      letterSpacing:"0.08em", display:"block", marginBottom:6, fontFamily:F }}>
+                      Status Note
+                    </label>
+                    <textarea value={engagement.garima_note||""} rows={3}
+                      onChange={e=>setEngagement(en=>({...en,garima_note:e.target.value}))}
+                      placeholder="e.g. Working on DCF model, on track for 28 Feb..."
+                      style={{ width:"100%", padding:"10px 12px", borderRadius:9, fontSize:14,
+                        border:`1.5px solid ${C.border}`, fontFamily:F, color:C.text,
+                        background:C.bg, outline:"none", boxSizing:"border-box", resize:"vertical" }}/>
+                  </div>
+                  <SaveBtn onClick={saveEngagement}/>
+                </Card>
+              )}
+            </div>
+          )}
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [client,  setClient]  = useState(null);
+  const [admin,   setAdmin]   = useState(null);
   const [loading, setLoading] = useState(true);
+
+  const isAdminRoute = window.location.pathname === "/admin";
 
   // Restore session on page refresh
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (session?.user?.email) {
-        const { data } = await supabase
-          .from("clients").select("*").eq("email", session.user.email).single();
-        if (data) setClient(data);
+        if (isAdminRoute) {
+          // Check admin table
+          const { data: adminData } = await supabase
+            .from("admins").select("*").eq("email", session.user.email).single();
+          if (adminData) setAdmin(adminData);
+        } else {
+          // Check clients table
+          const { data: clientData } = await supabase
+            .from("clients").select("*").eq("email", session.user.email).single();
+          if (clientData) setClient(clientData);
+        }
       }
       setLoading(false);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        if (event === "SIGNED_OUT") { setClient(null); }
+      async (event) => {
+        if (event === "SIGNED_OUT") { setClient(null); setAdmin(null); }
       }
     );
     return () => subscription.unsubscribe();
@@ -1822,12 +2455,12 @@ export default function App() {
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
-    setClient(null);
+    setClient(null); setAdmin(null);
   };
 
-  if (loading) return (
-    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center",
-      justifyContent:"center", fontFamily:F }}>
+  const Loader = () => (
+    <div style={{ minHeight:"100vh", background:isAdminRoute?"#0A1128":C.bg,
+      display:"flex", alignItems:"center", justifyContent:"center", fontFamily:F }}>
       <div style={{ textAlign:"center" }}>
         <Logo size={36}/>
         <p style={{ color:C.muted, fontSize:13, marginTop:12 }}>Loading…</p>
@@ -1835,6 +2468,15 @@ export default function App() {
     </div>
   );
 
+  if (loading) return <Loader/>;
+
+  // Admin route
+  if (isAdminRoute) {
+    if (!admin) return <AdminLogin onLogin={setAdmin}/>;
+    return <AdminPanel admin={admin} onLogout={handleLogout}/>;
+  }
+
+  // Client route
   if (!client) return <Login onLogin={setClient}/>;
   return <Portal client={client} onLogout={handleLogout}/>;
 }
