@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { supabase } from "./supabase.js";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, ReferenceLine
@@ -162,172 +163,215 @@ const Logo = ({ size=28 }) => (
 
 // ─── LOGIN PAGE ───────────────────────────────────────────────────────────────
 function Login({ onLogin }) {
-  const [step, setStep]   = useState("code"); // "code" | "register"
-  const [code, setCode]   = useState("");
+  const [step, setStep]     = useState("code"); // "code" | "register" | "signin"
+  const [code, setCode]     = useState("");
   const [client, setClient] = useState(null);
-  const [form, setForm]   = useState({ email:"", password:"", confirm:"" });
-  const [error, setError] = useState("");
+  const [form, setForm]     = useState({ email:"", password:"", confirm:"" });
+  const [error, setError]   = useState("");
   const [loading, setLoading] = useState(false);
 
-  const checkCode = () => {
-    const c = INVITE_CODES[code.trim().toUpperCase()];
-    if (!c) { setError("Invalid invite code. Please contact garima@finzzup.com"); return; }
-    setClient({ ...c, invite_code: code.trim().toUpperCase() });
-    setForm(f => ({ ...f, email: c.email }));
+  // Check invite code against Supabase
+  const checkCode = async () => {
+    if (!code.trim()) { setError("Please enter an invite code."); return; }
+    setLoading(true); setError("");
+    const { data, error: err } = await supabase
+      .from("clients")
+      .select("*")
+      .eq("invite_code", code.trim().toUpperCase())
+      .eq("active", true)
+      .single();
+    setLoading(false);
+    if (err || !data) { setError("Invalid invite code. Please contact garima@finzzup.com"); return; }
+    setClient(data);
+    setForm(f => ({ ...f, email: data.email }));
     setStep("register");
-    setError("");
   };
 
-  const register = () => {
+  // Register new account with Supabase Auth
+  const register = async () => {
     if (!form.email || !form.password) { setError("Please fill in all fields."); return; }
     if (form.password.length < 6)      { setError("Password must be at least 6 characters."); return; }
     if (form.password !== form.confirm) { setError("Passwords don't match."); return; }
-    setLoading(true);
-    // 🔧 Replace with: supabase.auth.signUp({ email, password }) + store client record
-    setTimeout(() => {
-      setLoading(false);
-      onLogin(client);
-    }, 1200);
+    setLoading(true); setError("");
+    const { data: authData, error: authErr } = await supabase.auth.signUp({
+      email: form.email,
+      password: form.password,
+      options: { data: { client_id: client.id, invite_code: client.invite_code } }
+    });
+    setLoading(false);
+    if (authErr) { setError(authErr.message); return; }
+    // Account created — log them straight in
+    onLogin(client);
   };
+
+  // Sign in existing account
+  const signIn = async () => {
+    if (!form.email || !form.password) { setError("Please fill in all fields."); return; }
+    setLoading(true); setError("");
+    const { error: authErr } = await supabase.auth.signInWithPassword({
+      email: form.email, password: form.password
+    });
+    if (authErr) { setLoading(false); setError("Incorrect email or password."); return; }
+    // Fetch client record by email
+    const { data, error: dbErr } = await supabase
+      .from("clients").select("*").eq("email", form.email).single();
+    setLoading(false);
+    if (dbErr || !data) { setError("Account not found. Please register first."); return; }
+    onLogin(data);
+  };
+
+  const InputField = ({ label, fkey, type="text", placeholder="" }) => (
+    <div style={{ marginBottom:14 }}>
+      <label style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase",
+        letterSpacing:"0.08em", display:"block", marginBottom:7, fontFamily:F }}>{label}</label>
+      <input value={form[fkey]}
+        onChange={e => { setForm(f=>({...f,[fkey]:e.target.value})); setError(""); }}
+        type={type} placeholder={placeholder}
+        style={{ width:"100%", padding:"12px 14px", borderRadius:10, fontSize:16,
+          border:`1.5px solid ${C.border}`, fontFamily:F, color:C.text,
+          background:C.bg, outline:"none", boxSizing:"border-box", transition:"border-color 0.2s" }}
+        onFocus={e => e.target.style.borderColor = C.blue}
+        onBlur={e  => e.target.style.borderColor = C.border}
+      />
+    </div>
+  );
 
   return (
     <div style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center",
       justifyContent:"center", padding:20, fontFamily:F }}>
-
-      {/* Subtle bg mesh */}
       <div style={{ position:"fixed", inset:0, pointerEvents:"none",
         background:`radial-gradient(ellipse 60% 50% at 20% 30%, rgba(59,111,247,0.07) 0%, transparent 60%),
                    radial-gradient(ellipse 40% 40% at 80% 70%, rgba(124,92,245,0.06) 0%, transparent 60%)` }}/>
 
       <div style={{ width:"100%", maxWidth:420, position:"relative" }}>
-        {/* Logo */}
         <div style={{ textAlign:"center", marginBottom:32 }}>
           <Logo size={36}/>
           <p style={{ fontSize:13, color:C.muted, marginTop:8 }}>Secure Client Portal</p>
         </div>
 
         <Card style={{ padding:32 }}>
-          {step === "code" ? (
-            <>
-              <h2 style={{ fontWeight:700, fontSize:20, color:C.text, marginBottom:6, textAlign:"center" }}>
-                Enter your invite code
-              </h2>
-              <p style={{ fontSize:13, color:C.muted, textAlign:"center", marginBottom:24, lineHeight:1.6 }}>
-                Garima will send you a unique code when your engagement begins.
-              </p>
 
-              <label style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:"0.08em", display:"block", marginBottom:8 }}>
-                Invite Code
-              </label>
-              <input
-                value={code}
-                onChange={e => { setCode(e.target.value.toUpperCase()); setError(""); }}
-                onKeyDown={e => e.key === "Enter" && checkCode()}
-                placeholder="e.g. NEXO2026"
-                style={{ width:"100%", padding:"13px 15px", borderRadius:10, fontSize:16,
-                  border:`1.5px solid ${error ? C.red : C.border}`, fontFamily:FM,
-                  fontWeight:600, letterSpacing:"0.1em", color:C.text, background:C.bg,
-                  outline:"none", boxSizing:"border-box", textTransform:"uppercase",
-                  textAlign:"center", transition:"border-color 0.2s" }}
-                onFocus={e => e.target.style.borderColor = C.blue}
-                onBlur={e  => e.target.style.borderColor = error ? C.red : C.border}
-              />
-
-              {error && <p style={{ color:C.red, fontSize:12, marginTop:8, textAlign:"center" }}>{error}</p>}
-
-              <button onClick={checkCode} style={{ width:"100%", marginTop:16, padding:14,
-                borderRadius:12, border:"none", background:C.grad1, color:"white",
-                fontFamily:F, fontWeight:700, fontSize:15, cursor:"pointer",
-                boxShadow:"0 6px 20px rgba(59,111,247,0.28)", touchAction:"manipulation" }}>
-                Continue →
+          {/* ── STEP 1: Enter invite code ── */}
+          {step === "code" && <>
+            <h2 style={{ fontWeight:700, fontSize:20, color:C.text, marginBottom:6, textAlign:"center" }}>
+              Welcome
+            </h2>
+            <p style={{ fontSize:13, color:C.muted, textAlign:"center", marginBottom:24, lineHeight:1.6 }}>
+              New client? Enter your invite code to register.<br/>
+              Already have an account?{" "}
+              <button onClick={() => setStep("signin")}
+                style={{ background:"none", border:"none", color:C.blue, fontWeight:700, fontSize:13, cursor:"pointer", fontFamily:F }}>
+                Sign in here
               </button>
+            </p>
 
-              <p style={{ textAlign:"center", fontSize:12, color:C.dim, marginTop:20 }}>
-                Don't have a code?{" "}
-                <a href="mailto:garima@finzzup.com" style={{ color:C.blue, fontWeight:600 }}>
-                  Email garima@finzzup.com
-                </a>
-              </p>
+            <label style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase",
+              letterSpacing:"0.08em", display:"block", marginBottom:8, fontFamily:F }}>
+              Invite Code
+            </label>
+            <input value={code}
+              onChange={e => { setCode(e.target.value.toUpperCase()); setError(""); }}
+              onKeyDown={e => e.key === "Enter" && checkCode()}
+              placeholder="e.g. NEXO2026"
+              style={{ width:"100%", padding:"13px 15px", borderRadius:10, fontSize:16,
+                border:`1.5px solid ${error ? C.red : C.border}`, fontFamily:FM,
+                fontWeight:600, letterSpacing:"0.1em", color:C.text, background:C.bg,
+                outline:"none", boxSizing:"border-box", textTransform:"uppercase",
+                textAlign:"center", transition:"border-color 0.2s" }}
+              onFocus={e => e.target.style.borderColor = C.blue}
+              onBlur={e  => e.target.style.borderColor = error ? C.red : C.border}
+            />
+            {error && <p style={{ color:C.red, fontSize:12, marginTop:8, textAlign:"center" }}>{error}</p>}
 
-              {/* Demo hint */}
-              <div style={{ marginTop:20, padding:"14px 16px", borderRadius:12,
-                background:`${C.blue}0A`, border:`1px solid ${C.blue}20` }}>
-                <div style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase",
-                  letterSpacing:"0.08em", marginBottom:10, fontFamily:F }}>🔍 Try a demo account</div>
-                <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-                  {[
-                    { code:"DEMO-STARTUP", label:"Startup / CFO Client",  icon:"🚀", color:C.blue   },
-                    { code:"DEMO-MSME",    label:"MSME Client",            icon:"🏢", color:C.teal   },
-                    { code:"DEMO-CORP",    label:"Corporate Client",        icon:"🏦", color:C.purple },
-                  ].map(d => (
-                    <button key={d.code} onClick={() => setCode(d.code)}
-                      style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
-                        padding:"9px 12px", borderRadius:9, border:`1px solid ${d.color}25`,
-                        background:`${d.color}08`, cursor:"pointer", fontFamily:F, width:"100%",
-                        touchAction:"manipulation" }}>
-                      <span style={{ fontSize:13, color:C.text, fontWeight:600 }}>{d.icon} {d.label}</span>
-                      <span style={{ fontFamily:FM, fontSize:11, fontWeight:700, color:d.color }}>{d.code}</span>
-                    </button>
-                  ))}
-                </div>
+            <button onClick={checkCode} disabled={loading} style={{ width:"100%", marginTop:16, padding:14,
+              borderRadius:12, border:"none", background:C.grad1, color:"white",
+              fontFamily:F, fontWeight:700, fontSize:15, cursor:"pointer", opacity:loading?0.75:1,
+              boxShadow:"0 6px 20px rgba(59,111,247,0.28)", touchAction:"manipulation" }}>
+              {loading ? "Checking…" : "Continue →"}
+            </button>
+
+            <p style={{ textAlign:"center", fontSize:12, color:C.dim, marginTop:20 }}>
+              Don't have a code?{" "}
+              <a href="mailto:garima@finzzup.com" style={{ color:C.blue, fontWeight:600 }}>
+                Email garima@finzzup.com
+              </a>
+            </p>
+
+            {/* Demo accounts */}
+            <div style={{ marginTop:20, padding:"14px 16px", borderRadius:12,
+              background:`${C.blue}0A`, border:`1px solid ${C.blue}20` }}>
+              <div style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase",
+                letterSpacing:"0.08em", marginBottom:10, fontFamily:F }}>🔍 Try a demo account</div>
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                {[
+                  { code:"DEMO-STARTUP", label:"Startup / CFO Client", icon:"🚀", color:C.blue   },
+                  { code:"DEMO-MSME",    label:"MSME Client",           icon:"🏢", color:C.teal   },
+                  { code:"DEMO-CORP",    label:"Corporate Client",       icon:"🏦", color:C.purple },
+                ].map(d => (
+                  <button key={d.code} onClick={() => setCode(d.code)}
+                    style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
+                      padding:"9px 12px", borderRadius:9, border:`1px solid ${d.color}25`,
+                      background:`${d.color}08`, cursor:"pointer", fontFamily:F, width:"100%",
+                      touchAction:"manipulation" }}>
+                    <span style={{ fontSize:13, color:C.text, fontWeight:600 }}>{d.icon} {d.label}</span>
+                    <span style={{ fontFamily:FM, fontSize:11, fontWeight:700, color:d.color }}>{d.code}</span>
+                  </button>
+                ))}
               </div>
-            </>
-          ) : (
-            <>
-              {/* Welcome back */}
-              <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:24,
-                padding:"12px 14px", borderRadius:12, background:`${C.green}0A`, border:`1px solid ${C.green}25` }}>
-                <span style={{ fontSize:22 }}>✅</span>
-                <div>
-                  <div style={{ fontSize:13, fontWeight:700, color:C.text }}>Code accepted!</div>
-                  <div style={{ fontSize:12, color:C.muted }}>{client.company}</div>
-                </div>
+            </div>
+          </>}
+
+          {/* ── STEP 2: Register ── */}
+          {step === "register" && <>
+            <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:24,
+              padding:"12px 14px", borderRadius:12, background:`${C.green}0A`, border:`1px solid ${C.green}25` }}>
+              <span style={{ fontSize:22 }}>✅</span>
+              <div>
+                <div style={{ fontSize:13, fontWeight:700, color:C.text }}>Code accepted!</div>
+                <div style={{ fontSize:12, color:C.muted }}>{client?.company}</div>
               </div>
+            </div>
+            <h2 style={{ fontWeight:700, fontSize:18, color:C.text, marginBottom:20 }}>Create your account</h2>
+            <InputField label="Email"            fkey="email"    type="email"    placeholder="your@email.com" />
+            <InputField label="Password"         fkey="password" type="password" placeholder="Min 6 characters" />
+            <InputField label="Confirm Password" fkey="confirm"  type="password" placeholder="Repeat password" />
+            {error && <p style={{ color:C.red, fontSize:12, marginTop:4 }}>{error}</p>}
+            <button onClick={register} disabled={loading} style={{ width:"100%", marginTop:8, padding:14,
+              borderRadius:12, border:"none", background:C.grad1, color:"white",
+              fontFamily:F, fontWeight:700, fontSize:15, cursor:"pointer", opacity:loading?0.75:1,
+              boxShadow:"0 6px 20px rgba(59,111,247,0.28)", touchAction:"manipulation" }}>
+              {loading ? "Creating account…" : "Create Account →"}
+            </button>
+            <button onClick={() => { setStep("code"); setError(""); }} style={{ width:"100%",
+              marginTop:10, padding:12, borderRadius:12, border:`1px solid ${C.border}`,
+              background:"transparent", color:C.muted, fontFamily:F, fontSize:14, cursor:"pointer" }}>
+              ← Back
+            </button>
+          </>}
 
-              <h2 style={{ fontWeight:700, fontSize:18, color:C.text, marginBottom:20 }}>
-                Create your account
-              </h2>
+          {/* ── STEP 3: Sign in (returning client) ── */}
+          {step === "signin" && <>
+            <h2 style={{ fontWeight:700, fontSize:20, color:C.text, marginBottom:6 }}>Welcome back</h2>
+            <p style={{ fontSize:13, color:C.muted, marginBottom:24, lineHeight:1.6 }}>
+              Sign in to your Finzzup portal.
+            </p>
+            <InputField label="Email"    fkey="email"    type="email"    placeholder="your@email.com" />
+            <InputField label="Password" fkey="password" type="password" placeholder="Your password" />
+            {error && <p style={{ color:C.red, fontSize:12, marginTop:4 }}>{error}</p>}
+            <button onClick={signIn} disabled={loading} style={{ width:"100%", marginTop:8, padding:14,
+              borderRadius:12, border:"none", background:C.grad1, color:"white",
+              fontFamily:F, fontWeight:700, fontSize:15, cursor:"pointer", opacity:loading?0.75:1,
+              boxShadow:"0 6px 20px rgba(59,111,247,0.28)", touchAction:"manipulation" }}>
+              {loading ? "Signing in…" : "Sign In →"}
+            </button>
+            <button onClick={() => { setStep("code"); setError(""); }} style={{ width:"100%",
+              marginTop:10, padding:12, borderRadius:12, border:`1px solid ${C.border}`,
+              background:"transparent", color:C.muted, fontFamily:F, fontSize:14, cursor:"pointer" }}>
+              ← New client? Enter invite code
+            </button>
+          </>}
 
-              {[
-                { label:"Email", key:"email", type:"email", placeholder:"your@email.com" },
-                { label:"Password", key:"password", type:"password", placeholder:"Min 6 characters" },
-                { label:"Confirm Password", key:"confirm", type:"password", placeholder:"Repeat password" },
-              ].map(({ label, key, type, placeholder }) => (
-                <div key={key} style={{ marginBottom:14 }}>
-                  <label style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase",
-                    letterSpacing:"0.08em", display:"block", marginBottom:7 }}>{label}</label>
-                  <input
-                    value={form[key]}
-                    onChange={e => { setForm(f=>({...f,[key]:e.target.value})); setError(""); }}
-                    type={type} placeholder={placeholder}
-                    style={{ width:"100%", padding:"12px 14px", borderRadius:10, fontSize:16,
-                      border:`1.5px solid ${C.border}`, fontFamily:F, color:C.text,
-                      background:C.bg, outline:"none", boxSizing:"border-box", transition:"border-color 0.2s" }}
-                    onFocus={e => e.target.style.borderColor = C.blue}
-                    onBlur={e  => e.target.style.borderColor = C.border}
-                  />
-                </div>
-              ))}
-
-              {error && <p style={{ color:C.red, fontSize:12, marginTop:4 }}>{error}</p>}
-
-              <button onClick={register} disabled={loading} style={{ width:"100%", marginTop:8,
-                padding:14, borderRadius:12, border:"none", background:C.grad1, color:"white",
-                fontFamily:F, fontWeight:700, fontSize:15, cursor:"pointer",
-                boxShadow:"0 6px 20px rgba(59,111,247,0.28)", opacity:loading?0.75:1,
-                touchAction:"manipulation" }}>
-                {loading ? "Creating account…" : "Create Account →"}
-              </button>
-
-              <button onClick={() => { setStep("code"); setError(""); }} style={{ width:"100%",
-                marginTop:10, padding:12, borderRadius:12, border:`1px solid ${C.border}`,
-                background:"transparent", color:C.muted, fontFamily:F, fontSize:14, cursor:"pointer" }}>
-                ← Back
-              </button>
-            </>
-          )}
         </Card>
-
         <p style={{ textAlign:"center", fontSize:11, color:C.dim, marginTop:20 }}>
           Powered by Finzzup · garima@finzzup.com
         </p>
@@ -1754,9 +1798,44 @@ function Portal({ client, onLogout }) {
 
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [client, setClient] = useState(null);
+  const [client,  setClient]  = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // Restore session on page refresh
+  useEffect(() => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (session?.user?.email) {
+        const { data } = await supabase
+          .from("clients").select("*").eq("email", session.user.email).single();
+        if (data) setClient(data);
+      }
+      setLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (event === "SIGNED_OUT") { setClient(null); }
+      }
+    );
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setClient(null);
+  };
+
+  if (loading) return (
+    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center",
+      justifyContent:"center", fontFamily:F }}>
+      <div style={{ textAlign:"center" }}>
+        <Logo size={36}/>
+        <p style={{ color:C.muted, fontSize:13, marginTop:12 }}>Loading…</p>
+      </div>
+    </div>
+  );
 
   if (!client) return <Login onLogin={setClient}/>;
-  return <Portal client={client} onLogout={() => setClient(null)}/>;
+  return <Portal client={client} onLogout={handleLogout}/>;
 }
 
