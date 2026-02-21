@@ -6,6 +6,7 @@
   "dependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "@supabase/supabase-js": "^2.39.0",
     "recharts": "^2.10.0"
   },
   "devDependencies": {
@@ -13,3 +14,4 @@
     "vite": "^4.4.0"
   }
 }
+
